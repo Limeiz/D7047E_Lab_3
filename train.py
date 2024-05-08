@@ -57,7 +57,10 @@ def train():
             param.requires_grad = train_CNN
 
     if load_model:
-        step = load_checkpoint(torch.load("my_checkpoint.pth.tar"), model, optimizer)
+        try:
+            step = load_checkpoint(torch.load("my_checkpoint.pth.tar"), model, optimizer)
+        except FileNotFoundError as e:
+            writer.add_text('except', "Checkpoint " + str(e), step)
 
     model.train()
 
