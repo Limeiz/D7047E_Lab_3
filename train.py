@@ -19,12 +19,24 @@ def train():
         ]
     )
 
-    train_loader, dataset = get_loader(
-        root_folder="flickr8k/images",
-        annotation_file="flickr8k/captions.txt",
-        transform=transform,
-        num_workers=2,
-    )
+    use_data = "flickr"
+
+    if use_data == "flickr":
+        train_loader, dataset = get_loader(
+            root_folder="flickr8k/images",
+            annotation_file="flickr8k/captions.txt",
+            transform=transform,
+            num_workers=2,
+        )
+    elif use_data == "coco":
+        train_loader, dataset = get_loader(
+            root_folder="data/coco",
+            annotation_file="data/coco/dataset_coco.json",
+            transform=transform,
+            num_workers=4,
+        )
+    else:
+        raise NotImplementedError("Dataset not implemented: " + use_data)
 
     torch.backends.cudnn.benchmark = True
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -41,7 +53,7 @@ def train():
     num_epochs = 100
 
     # for tensorboard
-    writer = SummaryWriter("runs/flickr")
+    writer = SummaryWriter("runs/" + use_data)
     step = 0
 
     # initialize model, loss etc
@@ -65,6 +77,8 @@ def train():
     model.train()
 
     for epoch in range(num_epochs):
+        writer.add_scalar('epoch', epoch, step)
+
         # Uncomment for test cases
         print_examples(model, device, dataset)
 

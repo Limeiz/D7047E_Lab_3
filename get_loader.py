@@ -1,4 +1,7 @@
-import os  
+import os
+import random
+from itertools import chain
+
 import pandas as pd
 import spacy 
 import torch
@@ -85,6 +88,67 @@ class FlickrDataset(Dataset):
         return img, torch.tensor(numericalized_caption)
 
 
+class CocoDataset(Dataset):
+    def __init__(self, root_dir, captions_file, transform=None, freq_threshold=5):
+        self.root_dir = root_dir
+        df = pd.read_json(captions_file)
+        self.transform = transform
+
+        # Get img, caption columns
+        self.imgs = []
+        self.captions = []
+        self.split = []
+        self.train_split = []
+        self.val_split = []
+        self.restval_split = []
+        self.test_split = []
+        self.img_next = 0
+        for desc in df["images"]:
+            dir = desc.get('filepath')
+            full_file_name = dir + os.sep + desc.get('filename')
+            imgid = desc.get('imgid')
+            assert imgid == self.img_next
+            self.img_next += 1
+            alt_sentences = map(lambda s: s['raw'], desc.get("sentences"))
+            split = desc.get('split')
+            self.imgs.append(full_file_name)
+            self.captions.append(list(alt_sentences))
+            self.split.append(split)
+
+            if split == 'train':
+                self.train_split.append(imgid)
+            elif split == 'val':
+                self.val_split.append(imgid)
+            elif split == 'test':
+                self.test_split.append(imgid)
+            elif split == 'restval':
+                self.restval_split.append(imgid)  # in val2014 directory...
+            else:
+                raise NotImplementedError("Split unknown: " + split)
+
+        # Initialize vocabulary and build vocab
+        self.vocab = Vocabulary(freq_threshold)
+        self.vocab.build_vocabulary(chain.from_iterable(self.captions))
+
+
+    def __len__(self):
+        return self.img_next
+
+    def __getitem__(self, index):
+        caption = random.choice(self.captions[index])  # Randomly select one caption
+        img_id = self.imgs[index]
+        img = Image.open(os.path.join(self.root_dir, img_id)).convert("RGB")
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        numericalized_caption = [self.vocab.stoi["<SOS>"]]
+        numericalized_caption += self.vocab.numericalize(caption)
+        numericalized_caption.append(self.vocab.stoi["<EOS>"])
+
+        return img, torch.tensor(numericalized_caption)
+
+
 class MyCollate:
     def __init__(self, pad_idx):
         self.pad_idx = pad_idx
@@ -107,7 +171,10 @@ def get_loader(
     shuffle=True,
     pin_memory=True,
 ):
-    dataset = FlickrDataset(root_folder, annotation_file, transform=transform)
+    dataset = (FlickrDataset(root_folder, annotation_file, transform=transform) if "flickr" in annotation_file
+               else (CocoDataset(root_folder, annotation_file, transform=transform) if "coco" in annotation_file
+                     else None)
+               )
 
     pad_idx = dataset.vocab.stoi["<PAD>"]
 
@@ -129,8 +196,8 @@ if __name__ == "__main__":
     )
 
     loader, dataset = get_loader(
-        "flickr8k/images/",
-        "flickr8k/captions.txt",
+        "data/flickr8k/images/",
+        "data/flickr8k/captions.txt",
         transform=transform
     )
 
