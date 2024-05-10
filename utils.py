@@ -3,64 +3,24 @@ import torchvision.transforms as transforms
 from PIL import Image
 
 
-def print_examples(model, device, dataset):
-    transform = transforms.Compose(
-        [
-            transforms.Resize((299, 299)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ]
-    )
+def print_examples(model, device, val_dataset):
+    transform = val_dataset.transform
 
     model.eval()
-    test_img1 = transform(Image.open("test_examples/dog.jpg").convert("RGB")).unsqueeze(
-        0
-    )
-    print("Example 1 CORRECT: Dog on a beach by the ocean")
-    print(
-        "Example 1 OUTPUT: "
-        + " ".join(model.caption_image(test_img1.to(device), dataset.vocab))
-    )
-    test_img2 = transform(
-        Image.open("test_examples/child.jpg").convert("RGB")
-    ).unsqueeze(0)
-    print("Example 2 CORRECT: Child holding red frisbee outdoors")
-    print(
-        "Example 2 OUTPUT: "
-        + " ".join(model.caption_image(test_img2.to(device), dataset.vocab))
-    )
-    test_img3 = transform(Image.open("test_examples/bus.png").convert("RGB")).unsqueeze(
-        0
-    )
-    print("Example 3 CORRECT: Bus driving by parked cars")
-    print(
-        "Example 3 OUTPUT: "
-        + " ".join(model.caption_image(test_img3.to(device), dataset.vocab))
-    )
-    test_img4 = transform(
-        Image.open("test_examples/boat.png").convert("RGB")
-    ).unsqueeze(0)
-    print("Example 4 CORRECT: A small boat in the ocean")
-    print(
-        "Example 4 OUTPUT: "
-        + " ".join(model.caption_image(test_img4.to(device), dataset.vocab))
-    )
-    test_img5 = transform(
-        Image.open("test_examples/horse.png").convert("RGB")
-    ).unsqueeze(0)
-    print("Example 5 CORRECT: A cowboy riding a horse in the desert")
-    print(
-        "Example 5 OUTPUT: "
-        + " ".join(model.caption_image(test_img5.to(device), dataset.vocab))
-    )
-    # test_img6 = transform(
-    #     Image.open("test_examples/1.jpg").convert("RGB")
-    # ).unsqueeze(0)
-    # print("Example 6: Man in black hat")
-    # print(
-    #     "Example 6 OUTPUT: "
-    #     + " ".join(model.caption_image(test_img6.to(device), dataset.vocab))
-    # )
+    for index, (filename, caption) in enumerate([
+        ("test_examples/dog.jpg", "Dog on a beach by the ocean"),
+        ("test_examples/child.jpg", "Child holding red frisbee outdoors"),
+        ("test_examples/bus.png", "Bus driving by parked cars"),
+        ("test_examples/boat.png", "A small boat in the ocean"),
+        ("test_examples/horse.png", "A cowboy riding a horse in the desert"),
+        ("test_examples/1.jpg", "Man in black hat"),
+    ]):
+        test_img = transform(Image.open(filename).convert("RGB")).unsqueeze(0)
+        print(f"Example {index} CORRECT: {caption}")
+        print("           OUTPUT: "
+              + " ".join(model.caption_image(test_img.to(device), val_dataset.dataset.vocab)))
+
+
     # # test_img7 = transform(
     #     Image.open("test_examples/2.jpg").convert("RGB")
     # ).unsqueeze(0)

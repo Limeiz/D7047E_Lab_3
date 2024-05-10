@@ -55,12 +55,14 @@ class Vocabulary:
             for token in tokenized_text
         ]
 
+    def stringify(self, tokenized_text):
+        return " ".join([self.vocab.itos[token] for token in tokenized_text])
+
 
 class FlickrDataset(Dataset):
-    def __init__(self, root_dir, captions_file, transform=None, freq_threshold=5):
+    def __init__(self, root_dir, captions_file, transformers=None, freq_threshold=5):
         self.root_dir = root_dir
         self.df = pd.read_csv(captions_file)
-        self.transform = transform
 
         # Get img, caption columns
         self.imgs = self.df["image"]
@@ -70,38 +72,33 @@ class FlickrDataset(Dataset):
         self.vocab = Vocabulary(freq_threshold)
         self.vocab.build_vocabulary(self.captions.tolist())
 
-    def __len__(self):
-        return len(self.df)
+        # Prepare transformers
+        self.transformers = {} if transformers is None else transformers
 
-    def __getitem__(self, index):
-        caption = self.captions[index]
-        img_id = self.imgs[index]
-        img = Image.open(os.path.join(self.root_dir, img_id)).convert("RGB")
-
-        if self.transform is not None:
-            img = self.transform(img)
-
-        numericalized_caption = [self.vocab.stoi["<SOS>"]]
-        numericalized_caption += self.vocab.numericalize(caption)
-        numericalized_caption.append(self.vocab.stoi["<EOS>"])
-
-        return img, torch.tensor(numericalized_caption)
+    def get_loader(self, split, transform=None, *args, **kwargs):
+        indexes = None
+        return DataSplit(self, split=split, indexes=indexes, transform=transform, *args, **kwargs)
 
 
 class CocoDataset(Dataset):
-    def __init__(self, root_dir, captions_file, transform=None, freq_threshold=5):
+    def __init__(self, root_dir, captions_file,
+                 transform=None, transformers=None, freq_threshold=5,
+                 *args, **kwargs):
+        """
+
+        :param root_dir:
+        :param captions_file:
+        :param transform: plain image to tensor transformer, no agumentation
+        :param transformers: dictionary of transformers, one for each split
+        :param freq_threshold:
+        """
         self.root_dir = root_dir
         df = pd.read_json(captions_file)
-        self.transform = transform
 
         # Get img, caption columns
         self.imgs = []
         self.captions = []
-        self.split = []
-        self.train_split = []
-        self.val_split = []
-        self.restval_split = []
-        self.test_split = []
+        self.split = dict()
         self.img_next = 0
         for desc in df["images"]:
             dir = desc.get('filepath')
@@ -109,42 +106,62 @@ class CocoDataset(Dataset):
             imgid = desc.get('imgid')
             assert imgid == self.img_next
             self.img_next += 1
-            alt_sentences = map(lambda s: s['raw'], desc.get("sentences"))
-            split = desc.get('split')
+            alt_sentences = list(map(lambda s: s['raw'], desc.get("sentences")))
             self.imgs.append(full_file_name)
-            self.captions.append(list(alt_sentences))
-            self.split.append(split)
+            self.captions.append(alt_sentences)
 
-            if split == 'train':
-                self.train_split.append(imgid)
-            elif split == 'val':
-                self.val_split.append(imgid)
-            elif split == 'test':
-                self.test_split.append(imgid)
-            elif split == 'restval':
-                self.restval_split.append(imgid)  # in val2014 directory...
-            else:
-                raise NotImplementedError("Split unknown: " + split)
+            split = desc.get('split')
+            assert split in ["train", "val", "test", "restval"]
+            split_ = self.split.get(split, [])
+            self.split[split] = split_
+            self.split[split].append(imgid)
 
         # Initialize vocabulary and build vocab
         self.vocab = Vocabulary(freq_threshold)
         self.vocab.build_vocabulary(chain.from_iterable(self.captions))
 
+        # Prepare transformers
+        self.transformers = transformers if transformers is not None else {
+            'train': transforms.Compose([transforms.AutoAugment(),
+                                         transform,
+                                         ]),
+            'val': transform,
+            'test': transform,
+        }
+
+
+    def get_loader(self, split=None, transform=None, **kwargs):
+        indexes = None if split is None else self.split.get(split, [])
+        transform = self.transformers[split] if transform is None else transform
+        return DataSplit(self, split, indexes=indexes, transform=transform)
+
+
+class DataSplit(Dataset):
+    def __init__(self, dataset, split, indexes=None, transform=None, *args, **kwargs):
+        self.dataset = dataset
+        self.split = split
+        self.transform = transform
+        self.indexes = indexes
 
     def __len__(self):
-        return self.img_next
+        return len(self.indexes) if self.indexes is not None else len(self.dataset.imgs)
 
     def __getitem__(self, index):
-        caption = random.choice(self.captions[index])  # Randomly select one caption
-        img_id = self.imgs[index]
-        img = Image.open(os.path.join(self.root_dir, img_id)).convert("RGB")
+        # convert to global index
+        if self.indexes is not None:
+            index = self.indexes[index]
+
+        caption = self.dataset.captions[index][
+            0]  # random.choice(self.captions[index])  # Randomly select one caption
+        img_id = self.dataset.imgs[index]
+        img = Image.open(os.path.join(self.dataset.root_dir, img_id)).convert("RGB")
 
         if self.transform is not None:
             img = self.transform(img)
 
-        numericalized_caption = [self.vocab.stoi["<SOS>"]]
-        numericalized_caption += self.vocab.numericalize(caption)
-        numericalized_caption.append(self.vocab.stoi["<EOS>"])
+        numericalized_caption = [self.dataset.vocab.stoi["<SOS>"]]
+        numericalized_caption += self.dataset.vocab.numericalize(caption)
+        numericalized_caption.append(self.dataset.vocab.stoi["<EOS>"])
 
         return img, torch.tensor(numericalized_caption)
 
@@ -162,24 +179,33 @@ class MyCollate:
         return imgs, targets
 
 
-def get_loader(
-    root_folder,
-    annotation_file,
-    transform,
-    batch_size=32,
-    num_workers=8,
-    shuffle=True,
-    pin_memory=True,
-):
-    dataset = (FlickrDataset(root_folder, annotation_file, transform=transform) if "flickr" in annotation_file
-               else (CocoDataset(root_folder, annotation_file, transform=transform) if "coco" in annotation_file
-                     else None)
-               )
+def get_dataset(root_folder, annotation_file, *args, **kwargs):
+    if "flickr" in annotation_file:
+        dataset_ = FlickrDataset(root_folder, annotation_file, *args, **kwargs)
+    elif "coco" in annotation_file:
+        dataset_ = CocoDataset(root_folder, annotation_file, *args, **kwargs)
+    else:
+        raise NotImplementedError("Unexpected dataset: " + annotation_file)
+    return dataset_
 
+def get_batch_loader(
+        dataset,
+        split,
+        transform=None,
+        auto_augment=False,
+        batch_size=32,
+        num_workers=8,
+        shuffle=True,
+        pin_memory=True,
+):
     pad_idx = dataset.vocab.stoi["<PAD>"]
 
+    if auto_augment and transform is not None:
+        transform = transforms.Compose([transforms.AutoAugment(),
+                                        transform,
+                                        ])
     loader = DataLoader(
-        dataset=dataset,
+        dataset=dataset.get_loader(split=split, transform=transform),
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=shuffle,
@@ -187,22 +213,26 @@ def get_loader(
         collate_fn=MyCollate(pad_idx=pad_idx),
     )
 
-    return loader, dataset
+    return loader
 
 
-if __name__ == "__main__":
+def main():
     transform = transforms.Compose(
-        [transforms.Resize((224, 224)), transforms.ToTensor(),]
+        [transforms.Resize((224, 224)),
+         transforms.ToTensor(), ]
     )
-
-    loader, dataset = get_loader(
+    dataset = get_dataset(
         "data/flickr8k/images/",
         "data/flickr8k/captions.txt",
         transform=transform
     )
-
-
+    loader = get_batch_loader(dataset, split="val", transform=transform)
 
     for idx, (imgs, captions) in enumerate(loader):
         print(imgs.shape)
         print(captions.shape)
+
+
+if __name__ == "__main__":
+    main()
+

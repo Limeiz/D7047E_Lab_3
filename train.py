@@ -1,40 +1,59 @@
+import datetime
+
 import torch
-from tqdm import tqdm
 import torch.nn as nn
 import torch.optim as optim
+import torchvision.models as models
 import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
-from utils import save_checkpoint, load_checkpoint, print_examples
-from get_loader import get_loader
+from tqdm import tqdm
+
+from get_loader import get_batch_loader, get_dataset
 from model import CNNtoRNN
+from utils import save_checkpoint, load_checkpoint, print_examples
 
 
 def train():
-    transform = transforms.Compose(
-        [
-            transforms.Resize((356, 356)),
-            transforms.RandomCrop((299, 299)),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ]
-    )
-
-    use_data = "flickr"
+    use_data = "coco"
 
     if use_data == "flickr":
-        train_loader, dataset = get_loader(
+        transform = transforms.Compose(
+            [
+                transforms.Resize((299, 299)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ]
+        )
+        train_transform = transforms.Compose(
+            [
+                transforms.Resize((356, 356)),
+                transforms.RandomCrop((299, 299)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ]
+        )
+        dataset = get_dataset(
             root_folder="flickr8k/images",
             annotation_file="flickr8k/captions.txt",
-            transform=transform,
-            num_workers=2,
+            transformers={'train': train_transform,
+                          'val': transform,
+                          'test': transform,
+                          },
         )
+        train_loader = get_batch_loader(dataset,
+                                        split="train",
+                                        num_workers=2,
+                                        )
     elif use_data == "coco":
-        train_loader, dataset = get_loader(
+        dataset = get_dataset(
             root_folder="data/coco",
+            transform=models.Inception_V3_Weights.DEFAULT.transforms(),
             annotation_file="data/coco/dataset_coco.json",
-            transform=transform,
-            num_workers=4,
         )
+        train_loader = get_batch_loader(dataset,
+                                        split='train',
+                                        num_workers=4,
+                                        )
     else:
         raise NotImplementedError("Dataset not implemented: " + use_data)
 
@@ -53,7 +72,7 @@ def train():
     num_epochs = 100
 
     # for tensorboard
-    writer = SummaryWriter("runs/" + use_data)
+    writer = SummaryWriter("runs/" + use_data + "/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
     step = 0
 
     # initialize model, loss etc
@@ -71,6 +90,7 @@ def train():
     if load_model:
         try:
             step = load_checkpoint(torch.load("my_checkpoint.pth.tar"), model, optimizer)
+            print("Loaded checkpoint, continuing at", step)
         except FileNotFoundError as e:
             writer.add_text('except', "Checkpoint " + str(e), step)
 
@@ -80,7 +100,7 @@ def train():
         writer.add_scalar('epoch', epoch, step)
 
         # Uncomment for test cases
-        print_examples(model, device, dataset)
+        print_examples(model, device, dataset.get_loader(split="val"))
 
         if save_model:
             checkpoint = {
