@@ -8,34 +8,43 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset
 from PIL import Image 
-import torchvision.transforms as transforms
+import torchvision.transforms.v2 as transforms
 
 
 # convert text -> numerical values
 # Setup padding of every batch (all examples should be of same seq_len and setup dataloader)
 
-spacy_eng = spacy.load('en_core_web_sm')
+spacy_eng = spacy.load('en_core_web_sm')  # _md
+
+# from sentence_transformers import SentenceTransformer, util
+
 
 
 class Vocabulary:
     def __init__(self, freq_threshold):
         self.itos = {0: "<PAD>", 1: "<SOS>", 2: "<EOS>", 3: "<UNK>"}
         self.stoi = {"<PAD>": 0, "<SOS>": 1, "<EOS>": 2, "<UNK>": 3}
+        self.vector = None
         self.freq_threshold = freq_threshold
+        self.weights = 1
+#        self.sentence_transformer = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+
 
     def __len__(self):
         return len(self.itos)
 
     @staticmethod
     def tokenizer_eng(text):
-        return [tok.text.lower() for tok in spacy_eng.tokenizer(text)]
+        return spacy_eng.tokenizer(text)
 
     def build_vocabulary(self, sentence_list):
         frequencies = {}
         idx = 4
 
+        vector = []
         for sentence in sentence_list:
-            for word in self.tokenizer_eng(sentence):
+            for tok in self.tokenizer_eng(sentence):
+                word = tok.text.lower()
                 if word not in frequencies:
                     frequencies[word] = 1
 
@@ -45,18 +54,36 @@ class Vocabulary:
                 if frequencies[word] == self.freq_threshold:
                     self.stoi[word] = idx
                     self.itos[idx] = word
+#                    vector.append(tok.vector)
                     idx += 1
+#        self.vector = torch.tensor(vector)
+        self.weights = torch.zeros(len(self.stoi))
+        for idx, word in self.itos.items():
+            frequency = frequencies.get(word, self.freq_threshold)  # special symbols -> threshold
+            self.weights[idx] = frequency
+        max_frequency = torch.max(self.weights)
+        self.weights = 1 + torch.log(max_frequency) - torch.log(self.weights)
+
+#    def vectorize(self, sentence):
+#        v_sum = torch.zeros_like(self.vector[0])
+#        for idx in sentence:
+#            if idx < 4:
+#                continue  # special
+#            v = self.vector[idx - 4]
+#            v_sum += v
+#        return v_sum / len(sentence)
 
     def numericalize(self, text):
-        tokenized_text = self.tokenizer_eng(text)
+        tokens = self.tokenizer_eng(text)
+        words = [token.text.lower() for token in tokens]
 
         return [
-            self.stoi[token] if token in self.stoi else self.stoi["<UNK>"]
-            for token in tokenized_text
+            self.stoi[word] if word in self.stoi else self.stoi["<UNK>"]
+            for word in words
         ]
 
     def stringify(self, tokenized_text):
-        return " ".join([self.vocab.itos[token] for token in tokenized_text])
+        return " ".join([self.itos[token] for token in tokenized_text])
 
 
 class FlickrDataset(Dataset):
@@ -142,6 +169,12 @@ class DataSplit(Dataset):
         self.split = split
         self.transform = transform
         self.indexes = indexes
+        self.use_only_first_caption = False
+
+#        for alt_sentences in self.dataset.captions:
+#            sentence_info = self.dataset.vocab.sentence_transformer.encode(alt_sentences,
+#                                                                   convert_to_tensor=True)
+#            print([1 - util.pytorch_cos_sim(sentence_info[0], sentenceA).cpu() for sentenceA in sentence_info])
 
     def __len__(self):
         return len(self.indexes) if self.indexes is not None else len(self.dataset.imgs)
@@ -151,8 +184,8 @@ class DataSplit(Dataset):
         if self.indexes is not None:
             index = self.indexes[index]
 
-        caption = self.dataset.captions[index][
-            0]  # random.choice(self.captions[index])  # Randomly select one caption
+        captions_ = self.dataset.captions[index]
+        caption = captions_[0] if self.use_only_first_caption else random.choice(captions_)  # Randomly select one caption #
         img_id = self.dataset.imgs[index]
         img = Image.open(os.path.join(self.dataset.root_dir, img_id)).convert("RGB")
 
@@ -201,7 +234,7 @@ def get_batch_loader(
     pad_idx = dataset.vocab.stoi["<PAD>"]
 
     if auto_augment and transform is not None:
-        transform = transforms.Compose([transforms.AutoAugment(),
+        transform = transforms.Compose([transforms.AutoAugment(),  # RandAugment
                                         transform,
                                         ])
     loader = DataLoader(
@@ -224,11 +257,11 @@ def main():
     dataset = get_dataset(
         "data/flickr8k/images/",
         "data/flickr8k/captions.txt",
-        transform=transform
     )
     loader = get_batch_loader(dataset, split="val", transform=transform)
 
     for idx, (imgs, captions) in enumerate(loader):
+        print(f"{idx:3d} / {len(loader):5}")
         print(imgs.shape)
         print(captions.shape)
 

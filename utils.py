@@ -3,8 +3,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 
 
-def print_examples(model, device, val_dataset):
-    transform = val_dataset.transform
+def print_examples(model, device, transform=None, vocab=None):
 
     model.eval()
     for index, (filename, caption) in enumerate([
@@ -18,7 +17,7 @@ def print_examples(model, device, val_dataset):
         test_img = transform(Image.open(filename).convert("RGB")).unsqueeze(0)
         print(f"Example {index} CORRECT: {caption}")
         print("           OUTPUT: "
-              + " ".join(model.caption_image(test_img.to(device), val_dataset.dataset.vocab)))
+              + " ".join(model.caption_image(test_img.to(device), vocab)))
 
 
     # # test_img7 = transform(
